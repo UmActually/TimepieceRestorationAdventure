@@ -13,6 +13,9 @@
 #define DISPLAYED_HOURS 18
 #define DISPLAYED_MINUTES 0
 
+#define M_SENSOR_PIN A0
+#define H_SENSOR_PIN A1
+
 // Grande: 75
 // Chico: 18
 // Pasos: 142.2 periódico
@@ -27,10 +30,13 @@ int cycle = 0;
 int leapHourCounter = 0;
 int leapMinuteCounter = 0;
 
+bool isMinuteatHome = false;
+bool isHouratHome = false;
+
 unsigned int totalHourSteps = 0;
 unsigned int totalMinuteSteps = 0;
 
-int bumpHalfHour(int amount = 1) {
+bool bumpHalfHour(int amount = 1) {
   int hourSteps;
   leapHourCounter++;
   if (leapHourCounter == 3) {
@@ -42,10 +48,16 @@ int bumpHalfHour(int amount = 1) {
   long resp = hourSteps * amount;
   Serial.print("Hour Steps "); Serial.println(resp);
   hours.step(resp);
-  return resp;
+  
+  totalHourSteps += resp;
+  //Serial.print("----> Hour Cycle "); Serial.print(cycle);
+  Serial.print(" | Stepping "); Serial.print(resp);
+  Serial.print(" | Total "); Serial.println(totalHourSteps);
+  
+  return digitalRead(H_SENSOR_PIN);
 }
 
-int bumpMinute(int amount = 1) {
+bool bumpMinute(int amount = 1) {
   int minuteSteps;
   leapMinuteCounter++;
   if (leapMinuteCounter == 3) {
@@ -57,7 +69,16 @@ int bumpMinute(int amount = 1) {
   Serial.print("Minute Steps "); Serial.println(minuteSteps);
   long resp = minuteSteps * amount;
   minutes.step(resp);
-  return resp;
+  
+  //debug
+  int absMinuteSteps = resp * -1;
+  totalMinuteSteps += absMinuteSteps;
+  //Serial.print("Cycle "); Serial.print(cycle);
+  Serial.print(" | Stepping "); Serial.print(absMinuteSteps);
+  Serial.print(" | Total "); Serial.println(totalMinuteSteps);
+  
+  return digitalRead(M_SENSOR_PIN);
+  
 }
 
 void testRTC(){
@@ -71,64 +92,83 @@ void testRTC(){
   Serial.println(clock.dayofweek);
 }
 
-void initialAdjust(){
-  clock.updateTime();
-  currentMinute = clock.minutes;
-  int hourDiff = (clock.hours - DISPLAYED_HOURS);
-  int minuteDiff = (clock.minutes - DISPLAYED_MINUTES);
-
-  int halfHourDiff = hourDiff * 2;
-
-  if (minuteDiff != 0) {
-    if (minuteDiff < 0) {
-      minuteDiff += 60;
+bool findSensorHome(String HM){
+  //turn motors
+  if (HM == "M"){
+    while (digitalRead(M_SENSOR_PIN)){
+      minutes.step(-1);
     }
-    Serial.print("Minutes Diff: ");
-    Serial.println(minuteDiff);
-    bumpMinute(minuteDiff);
-
-    // Ajustar cuál de las dos tarjetas de hora debe salir
-    // según el minuto
-    if (DISPLAYED_MINUTES < 30 && clock.minutes >= 30) {
-      halfHourDiff++;
-    } else if (DISPLAYED_MINUTES >= 30 && clock.minutes < 30) {
-      halfHourDiff--;
+    delay(1000);
+    return true;
+  }else{
+    while (digitalRead(H_SENSOR_PIN)){
+      hours.step(1);
     }
-  }
-
-  if (halfHourDiff != 0){
-    if (halfHourDiff < 0){
-      halfHourDiff += 48;
-    }
-    Serial.print("Half Hours Diff: ");
-    Serial.println(halfHourDiff);
-    bumpHalfHour(halfHourDiff);
+    delay(1000);
+    return true;
   }
 }
 
-// void setup() {
-//   hours.setSpeed(RPM);
-//   minutes.setSpeed(RPM);
-//   bumpHalfHour(47);
-// }
+void sensorInitialAdjust(){
+  
+  ////Hours first////
+  //go to home
+  isHouratHome = findSensorHome("H");
 
-// void loop() {
+  // Ajustar cuál de las dos tarjetas de hora debe salir
+  // según el minuto
+  //get the most recent time from clock
+  clock.updateTime();
+  currentMinute = clock.minutes;
+  int halfHourDiff = clock.hours * 2;
+  if (clock.minutes >= 30) {
+      halfHourDiff++;
+    } 
+  //Serial.println(halfHourDiff);
+  if (isHouratHome){
+    bumpHalfHour(halfHourDiff);
+  }
 
-// }
+  ////Minutes Next////
+  //go to home
+  testRTC(); //just checking secconds in serialprint
+  isMinuteatHome = findSensorHome("M");
+
+  //get the most recent time from clock
+  clock.updateTime();
+  currentMinute = clock.minutes;
+  Serial.print(" Clock Minute in sensorInitialAdjust: ");
+  Serial.println(clock.minutes);
+  testRTC(); //just checking secconds in serialprint
+  if (isMinuteatHome){
+    bumpMinute(clock.minutes);
+  }
+}
 
 void setup() {
   Serial.begin(9600);
   hours.setSpeed(RPM);
   minutes.setSpeed(RPM);
 
+  //sensors
+  pinMode(M_SENSOR_PIN, INPUT);
+  pinMode(H_SENSOR_PIN, INPUT);
+  
   //setup
-  //initialAdjust();
+  sensorInitialAdjust();
+
+  Serial.print("Current Minute Var: ");
+  Serial.print(currentMinute);
+  Serial.print(" Clock Minute: ");
+  Serial.println(clock.minutes);
+
 }
 
 void loop() {
   delay(1000);
 
   clock.updateTime();
+  
   if (currentMinute == clock.minutes) {
     return;
   }
@@ -137,18 +177,11 @@ void loop() {
   currentMinute = clock.minutes;
   cycle++;
 
-  int minuteSteps = bumpMinute();
-  int absMinuteSteps = minuteSteps * -1;
-  totalMinuteSteps += absMinuteSteps;
-  Serial.print("Cycle "); Serial.print(cycle);
-  Serial.print(" | Stepping "); Serial.print(absMinuteSteps);
-  Serial.print(" | Total "); Serial.println(totalMinuteSteps);
+  //bumpmotors verificar si llegó al home cuando se estaba esperando... wip
+  bool minuteHome = bumpMinute();
 
   if (currentMinute == 0 || currentMinute == 30) {
-    int hourSteps = bumpHalfHour();
-    totalHourSteps += hourSteps;
-    Serial.print("----> Hour Cycle "); Serial.print(cycle);
-    Serial.print(" | Stepping "); Serial.print(hourSteps);
-    Serial.print(" | Total "); Serial.println(totalHourSteps);
+    bool hourSteps = bumpHalfHour();
   }
 }
+
