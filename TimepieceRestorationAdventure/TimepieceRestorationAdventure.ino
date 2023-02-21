@@ -184,4 +184,3 @@ void loop() {
     bool hourSteps = bumpHalfHour();
   }
 }
-
