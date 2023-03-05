@@ -5,7 +5,7 @@
  */
 
 #include <Stepper.h>
-#include <virtuabotixRTC.h>               //Include library for clock module
+#include <virtuabotixRTC.h> //Include library for clock module
 
 #define STEPS_PER_REVOLUTION 2048
 #define RPM 12
@@ -17,250 +17,150 @@
 // Chico: 18
 // Pasos: 142.2 periódico
 
-//UNO//
+// UNO
 //Stepper hours(STEPS_PER_REVOLUTION, 8, 10, 9, 11);
 //Stepper minutes(STEPS_PER_REVOLUTION, 4, 6, 5, 7);
-//virtuabotixRTC clock(3, 12, 13);    //Create a clock object attached to pins 3, 12, 13 - CLK, DAT, RST
+//virtuabotixRTC clock(3, 12, 13);  //Create a clock object attached to pins 3, 12, 13 - CLK, DAT, RST
 
-//NANO//
-Stepper minutes(STEPS_PER_REVOLUTION, 5, 3, 4, 2); //pins nano pcb in1,2,3,4 / 5,4,3,2
-Stepper hours(STEPS_PER_REVOLUTION, 9, 7, 8, 6); //pins nano pcb in1,2,3,4 / 9,8,7,6
-virtuabotixRTC clock(12, 11, 10);    //NANO Create a clock object attached to pins 12, 11, 10 - CLK, DAT, RST
+// NANO
+Stepper minutes(STEPS_PER_REVOLUTION, 5, 3, 4, 2);  // Pins nano pcb in1,2,3,4 / 5,4,3,2
+Stepper hours(STEPS_PER_REVOLUTION, 9, 7, 8, 6);  // Pins nano pcb in1,2,3,4 / 9,8,7,6
+virtuabotixRTC clock(12, 11, 10);  // NANO Create a clock object attached to pins 12, 11, 10 - CLK, DAT, RST
 
 // seconds, minutes, hours, day of the week, day of the month, month, year
-//clock.setDS1302Time(00, 00, 18, 1, 05, 2, 2023);        //Only required once to reset the clock time
+// clock.setDS1302Time(00, 00, 18, 1, 05, 2, 2023);  // Only required once to reset the clock time
 
 int currentMinute = 0;
-int minutecycle = 0;
 int minuteHomeCounter = 0;
-int leapHourCounter = 0;
-int leapMinuteCounter = 0;
-byte state;
+unsigned int leapMinuteCounter = 0;
+long totalMinuteSteps = 0;
 
-bool isMinuteatHome = false;
-bool isHouratHome = false;
-bool minuteAutoCalibration = false;
+bool isMinuteAtHome = false;
+bool ignoreBump = false;
 
-unsigned int totalHourSteps = 0;
-unsigned int totalMinuteSteps = 0;
+enum class HM {
+  hour, minute
+};
 
-void powerDownStepper (String HM)
-{
-  if (HM == "H"){
-    for (byte i = 6 ; i <= 9 ; i++) 
-    {
-      state = (state << 1) + digitalRead(i) ;
-      pinMode (i, INPUT) ;
-    }
-  } else if (HM == "M"){
-    for (byte i = 2 ; i <= 5 ; i++) 
-    {
-      state = (state << 1) + digitalRead(i) ;
-      pinMode (i, INPUT) ;
-    }
+void powerStepper(HM type, bool enable) {
+  int rangeStart, rangeEnd;
+
+  if (type == HM::hour) {
+    rangeStart = 6;
+    rangeEnd = 9;
+  } else {
+    rangeStart = 2;
+    rangeEnd = 5;
   }
-}
 
-void powerUpStepper (String HM)
-{
-  if (HM == "H"){
-    for (byte i = 6 ; i <= 9 ; i++) 
-    {
-      pinMode (i, OUTPUT) ;
-      digitalWrite (i, (state & 0x8) == 0x8) ;
-      state <<= 1 ;
-    }
-  } else if (HM == "M"){
-    for (byte i = 2 ; i <= 5 ; i++) 
-    {
-      pinMode (i, OUTPUT) ;
-      digitalWrite (i, (state & 0x8) == 0x8) ;
-      state <<= 1 ;
-    }
+  for (int pin = rangeStart; pin <= rangeEnd; pin++) {
+    pinMode(pin, enable ? OUTPUT : INPUT);
   }
 }
 
 bool bumpHalfHour(int amount = 1) {
-  powerUpStepper("H"); // start the motor  
-  int hourSteps;
-  leapHourCounter++;
-  if (leapHourCounter == 3) {
-    hourSteps = 726;
-    leapHourCounter = 0;
-  } else {
-    hourSteps = 725;
-  }
-  long resp = long(hourSteps) * long(amount);
+  powerStepper(HM::hour, true); // Start the motor  
 
-  if (resp > 32767){
-    int respdiff = resp - 32767;
-    hours.step(respdiff);
-    hours.step(32767);
-  }else{
-    hours.step(resp);
+  for (int i = 0; i < amount; i++) {
+    hours.step(725);
   }
-  
-  totalHourSteps += resp;
-  Serial.print(F(" | Stepping ")); Serial.print(resp);
-  Serial.print(F(" | Total ")); Serial.println(totalHourSteps);
-  powerDownStepper("H"); // stop the motor to avoid overheat
+
+  powerStepper(HM::hour, false); // Stop the motor to avoid overheat
   return !digitalRead(H_SENSOR_PIN);
 }
 
 bool bumpMinute(int amount = 1) {
-  powerUpStepper("M"); // start the motor
+  powerStepper(HM::minute, true); // Start the motor
 
-  int minuteSteps;
-  long minuteStepsInit;
+  long minuteSteps = 0;
 
-  //for to get the perfect steps when sending more than 1
-  if (amount > 1 ){
-    for (int i=1; i <= amount; i++){
-
-      minutecycle++;
-      if (minutecycle == 60){
-        minutecycle = 0;
-      } else if (minutecycle > 60) {
-        minutecycle = minutecycle - 60;
-      }
-      
-      leapMinuteCounter++;
-      if (minutecycle == 30){
-        minuteSteps = -151;
-        leapMinuteCounter = 0;
-      } else if (leapMinuteCounter == 10) {
-        //minuteSteps = -152;
-        if (minutecycle != 30){
-          minuteSteps = -152;
-        }
-        leapMinuteCounter = 0;
-      } else {
-        //minuteSteps = -151;
-        minuteSteps = -153;
-      }
-      minuteStepsInit += minuteSteps;
-    }
-
-    Serial.print(F("leapMinuteCounter ")); Serial.print(leapMinuteCounter);
-    Serial.print(F(" Minute Steps ")); Serial.print(minuteSteps);
-    Serial.print(F(" Minute Cycle ")); Serial.println(minutecycle);
-
-    minutes.step(minuteStepsInit);
-
-    int absMinuteSteps = minuteStepsInit * -1;
-    totalMinuteSteps += absMinuteSteps;
-
-  } else {
-
-    minutecycle = minutecycle + amount;
-    if (minutecycle == 60){
-      minutecycle = 0;
-    } else if (minutecycle > 60) {
-      minutecycle = minutecycle - 60;
-    }
-
+  for (int i = 0; i < amount; i++) {
     leapMinuteCounter++;
-    if (minutecycle == 30){
-        minuteSteps = -151;
-        leapMinuteCounter = 0;
-      } else if (leapMinuteCounter == 10) {
-        //minuteSteps = -152;
-        if (minutecycle != 30){
-          minuteSteps = -152;
-        }
-        leapMinuteCounter = 0;
-      } else {
-        //minuteSteps = -151;
-        minuteSteps = -153;
+    if (leapMinuteCounter == 60) {
+      leapMinuteCounter = 0;
     }
-    Serial.print(F("leapMinuteCounter ")); Serial.print(leapMinuteCounter);
-    Serial.print(F(" Minute Steps ")); Serial.print(minuteSteps);
-    Serial.print(F(" Minute Cycle ")); Serial.println(minutecycle);
-    long resp = minuteSteps * amount;
-    minutes.step(resp);
-    
-    //debug
-    int absMinuteSteps = resp * -1;
-    totalMinuteSteps += absMinuteSteps;
-    //Serial.print("Cycle "); Serial.print(cycle);
-    Serial.print(F(" | Stepping ")); Serial.print(absMinuteSteps);
-    Serial.print(F(" | Total ")); Serial.println(totalMinuteSteps);
+
+    if (leapMinuteCounter == 30) {
+      minuteSteps -= 151;
+    } else if (leapMinuteCounter % 10 == 0) {
+      minuteSteps -= 152;
+    } else {
+      minuteSteps -= 153;
+    }
   }
 
-  powerDownStepper("M"); // stop the motor to avoid overheat
+  long absMinuteSteps = abs(minuteSteps);
+  totalMinuteSteps += absMinuteSteps;
 
-  if (!digitalRead(M_SENSOR_PIN)){
-    minuteHomeCounter ++;
-      if(minuteHomeCounter == 1){
-        totalMinuteSteps = 0;
-        leapMinuteCounter = 0;
-       
-      }
-  }else{
+  Serial.print(F("leapMinuteCounter ")); Serial.print(leapMinuteCounter);
+  Serial.print(F(" Minute Steps ")); Serial.print(absMinuteSteps);
+  Serial.print(F(" Total Minute Steps ")); Serial.println(totalMinuteSteps);
+
+  minutes.step(minuteSteps);
+
+  powerStepper(HM::minute, false); // Stop the motor to avoid overheat
+
+  if (!digitalRead(M_SENSOR_PIN)) {
+    minuteHomeCounter++;
+  } else {
     minuteHomeCounter = 0;
   }
 
-  if (!digitalRead(M_SENSOR_PIN)){
+  if (minuteHomeCounter == 1) {
+    totalMinuteSteps = 0;
     return true;
-  }else {
-    return false;
   }
+
+  return false;
 }
 
 void testRTC(){
-  clock.updateTime(); //Update the time
+  clock.updateTime(); // Update the time
   Serial.print(clock.hours);
   Serial.print(":");
   Serial.print(clock.minutes);
   Serial.print(":");
   Serial.print(clock.seconds);
- }
+}
 
-bool findSensorHome(String HM){
-  //turn motors
-  if (HM == "M"){
+void findSensorHome(HM type){
+  // Turn motors
+  if (type == HM::minute) {
     while (digitalRead(M_SENSOR_PIN)){
       minutes.step(-1);
     }
     delay(1000);
-    return true;
-  }else{
+  } else {
     while (digitalRead(H_SENSOR_PIN)){
       hours.step(1);
     }
     delay(1000);
-    return true;
   }
 }
 
 void sensorInitialAdjust(){
-  ////Hours first////
-  //go home
-  isHouratHome = findSensorHome("H");
+  // Horas
+  findSensorHome(HM::hour);
 
   // Ajustar cuál de las dos tarjetas de hora debe salir según el minuto
-  //get the most recent time from clock
+  // get the most recent time from clock
   clock.updateTime();
-  currentMinute = clock.minutes;
   int halfHourDiff = clock.hours * 2;
   if (clock.minutes >= 30) {
-      halfHourDiff++;
-    } 
-
-  if (isHouratHome){
-    bumpHalfHour(halfHourDiff);
+    halfHourDiff++;
   }
 
-  ////Minutes Next////
-  //go home
-  isMinuteatHome = findSensorHome("M");
+  bumpHalfHour(halfHourDiff);
 
-  //get the most recent time from clock
+  // Minutos
+  findSensorHome(HM::minute);
+
   clock.updateTime();
+
+  // Tener un valor inicial para currentMinute, para que no siempre se bumpee
+  // en la primera vez que se corre el loop
   currentMinute = clock.minutes;
-  if (isMinuteatHome){
-    bumpMinute(clock.minutes);
-  }
+  bumpMinute(currentMinute);
 }
 
 void setup() {
@@ -268,11 +168,11 @@ void setup() {
   hours.setSpeed(RPM);
   minutes.setSpeed(RPM);
 
-  //sensors
+  // Sensores
   pinMode(M_SENSOR_PIN, INPUT);
   pinMode(H_SENSOR_PIN, INPUT);
   
-  //setup
+  // Setup
   sensorInitialAdjust();
 }
 
@@ -286,30 +186,33 @@ void loop() {
   }
 
   testRTC();
+
   currentMinute = clock.minutes;
 
-  //bumpmotors //minutes// check if its at home when expected... wip
-  if (!minuteAutoCalibration){
-    isMinuteatHome = bumpMinute();
+  if (!ignoreBump){
+    isMinuteAtHome = bumpMinute();
   }
-  if (isMinuteatHome && clock.minutes != 0 && minuteHomeCounter == 1){ //Descalibrado// reloj muestra 00 y los minutos no son 00
-    if (isMinuteatHome && clock.minutes > 0 && minuteHomeCounter == 1){
-      isMinuteatHome = bumpMinute(clock.minutes);
-      minuteAutoCalibration = false; 
-    } else if (isMinuteatHome && clock.minutes < 0 && minuteHomeCounter == 1){
-    //need to ignore bumps until clock.minutes reach 0
-      minuteAutoCalibration = true;
-    } 
-  } else {
-    if (minuteAutoCalibration){
-        minuteAutoCalibration = false; 
-        isMinuteatHome = bumpMinute();
-    }
-  }  
 
-  //Bump Hours
+  // Descalibrado - reloj muestra 00 y los minutos no son 00
+  if (isMinuteAtHome && currentMinute != 0) {
+    // Está atrasado
+    if (currentMinute < 30) {
+      isMinuteAtHome = bumpMinute(currentMinute);
+      ignoreBump = false;
+
+    // Está adelantado
+    } else {
+      // Ignorar bumps hasta que realmente sean las 00
+      ignoreBump = true;
+    }
+  
+  // Calibrado e ignoreBump es verdadero
+  } else if (ignoreBump) {
+    ignoreBump = false;
+  }
+
+  // Bump Hours
   if (currentMinute == 0 || currentMinute == 30) {
       bool hourSteps = bumpHalfHour();
-  } 
-
+  }
 }
